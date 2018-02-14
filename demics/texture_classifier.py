@@ -3,23 +3,28 @@ import os
 import copy
 import numpy as np
 import pandas as pd
+import logging
 from imgaug import augmenters as iaa
 from sklearn.decomposition import PCA
 
-#TODO logging
+#TODO logging ?
 #TODO error handling, check for correct data(types)
 #TODO testing
-#TODO GridSearch / optimize_hyperparameter() ? 
+#TODO GridSearch / optimize_hyperparameter() ?
+#TODO split data into train / test / validation set ??
+#TODO module visualization ?
 
 class TextureClassifier(object):
 
     def __init__(self, num_histogram_bins=10, pca_dims=10, kernel="rbf", probability=True):
-        """ Initialize Object. """
+        """ Initialize. """
         self.num_histogram_bins = num_histogram_bins
         self.pca_dims = pca_dims
         self.classifier = svm.SVC(kernel=kernel, probability=probability)
+        self.feature_extractor = HistogramFeatureExtractor(self.num_histogram_bins)
         self.pca = None
         self.traindata = None
+        self.logger = logging.getLogger(__package__)
 
     @classmethod
     def load(cls, filename):
@@ -29,13 +34,15 @@ class TextureClassifier(object):
         """
         import pickle
         dictionary = pickle.load(open(filename))
-        obj = cls(dictionary["histogram_bins"], dictionary["numFeatures"])
-        #obj = cls(dictionary["num_histogram_bins"], dictionary["pca_dims"], dictionary["kernel"], dictionary["probability"])
+        #obj = cls(dictionary["histogram_bins"], dictionary["numFeatures"]) # old names (from old classifiers)...
+        obj = cls(dictionary["num_histogram_bins"], dictionary["pca_dims"])
         obj.pca = dictionary["pca"]
+        obj.classifier = dictionary["svm"]
         return obj
 
     @staticmethod
     def _init_augmentor():
+        """ Init image augmentor. """
         st = lambda aug: iaa.Sometimes(0.5, aug)
         augmentor = iaa.Sequential([iaa.Crop(px=(0, 25)),  # crop images from each side by 0 to 16px (randomly chosen)
                                     iaa.Fliplr(0.5),       # horizontally flip 50% of the images
@@ -52,6 +59,7 @@ class TextureClassifier(object):
         return augmentor
 
     def _augment_patches(self, num_augmentations):
+        """ Augment train patches. """
         if num_augmentations < 1:
             return
         self.augmentor = self._init_augmentor()
@@ -67,13 +75,8 @@ class TextureClassifier(object):
         augmented_data = pd.DataFrame(data={"patches":augmented, "labels":labels, "augmented":[True]*len(labels)})
         self.traindata = self.traindata.append(augmented_data, ignore_index=True)
 
-    def _extract_features(self):
-        patches = self.traindata["patches"].values
-        feature_extractor = HistogramFeatureExtractor(self.num_histogram_bins)
-        features = feature_extractor.extract_features(patches)
-        self.traindata["features"] = pd.Series(data=features)
-
     def _fit_pca(self):
+        """ Fit and apply PCA to train data. """
         pca = PCA(n_components=self.pca_dims)
         tmp = self.traindata["features"].values
         features = np.array([t for t in tmp])
@@ -81,10 +84,12 @@ class TextureClassifier(object):
         self.traindata["features"] = pd.Series(data=pca.transform(features).tolist())
         self.pca = pca
 
-    def _apply_pca(self, patches):
+    def _apply_pca(self, features):
+        """ Apply trained PCA to new features. """
         pass
 
     def _fit_svm(self):
+        """ Fit SVM to features generated from train data. """
         self.classifier.fit([f for f in self.traindata["features"].values], [l for l in self.traindata["labels"].values])
 
     def train(self, patches, labels, num_augmentations=5):
@@ -94,9 +99,16 @@ class TextureClassifier(object):
             labels (list) Labels according to given patch list.
         """
         assert len(patches) == len(labels), "Length of label list and length of patch list must be equal."
+        # save original and augmented train data
         self.traindata = pd.DataFrame(data={"patches":patches, "labels":labels, "augmented":[False]*len(labels)})
         self._augment_patches(num_augmentations)
-        self._extract_features()
+
+        # extract features from patches
+        patches = self.traindata["patches"].values
+        features = self.feature_extractor.extract_features(patches)
+        self.traindata["features"] = pd.Series(data=features)
+
+        # fit PCA and SVM
         self._fit_pca()
         self._fit_svm()
 
@@ -135,7 +147,7 @@ class TextureClassifier(object):
 class HistogramFeatureExtractor(object):
 
         def __init__(self, num_histogram_bins, maxSize=500):
-            """ Initialize object. """
+            """ Initialize. """
             self.num_histogram_bins = num_histogram_bins
             self.radius_img = self._create_radius_image(maxSize)
 
@@ -150,6 +162,7 @@ class HistogramFeatureExtractor(object):
             return radius_img
 
         def _get_radius_image(self):
+            """ Get copy of self.radius_img. """
             return copy.deepcopy(self.radius_img)
 
         def extract_features(self, patches):
