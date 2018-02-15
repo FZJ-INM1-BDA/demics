@@ -8,12 +8,13 @@ import time
 from imgaug import augmenters as iaa
 from sklearn.decomposition import PCA
 
-#TODO error handling, check for correct data(types)
+#TODO error handling, check for correct data(types) (uint8)
 #TODO testing
 #TODO python3!!!!
 #TODO GridSearch / optimize_hyperparameter() ?
-#TODO split data into train / test / validation set ??
 #TODO module visualization ?
+#TODO parallelize
+#TODO meanshift
 
 class TextureClassifier(object):
 
@@ -40,6 +41,7 @@ class TextureClassifier(object):
         obj = cls(dictionary["num_histogram_bins"], dictionary["pca_dims"])
         obj.pca = dictionary["pca"]
         obj.classifier = dictionary["svm"]
+        obj.with_probability = obj.classifier.probability
         return obj
 
     @staticmethod
@@ -78,7 +80,8 @@ class TextureClassifier(object):
             labels = labels + [label]*num_augmentations
         augmented_data = pd.DataFrame(data={"patches":augmented, "labels":labels, "augmented":[True]*len(labels)})
         self.traindata = self.traindata.append(augmented_data, ignore_index=True)
-        self.logger.info("Image augmentation took {} seconds. Number of patches after augmentation: {}".format(time.time()-start, len(self.traindata)))
+        self.logger.info("Image augmentation took {} seconds. Number of patches after augmentation: {}".format(time.time()-start,
+                                                                                                               len(self.traindata)))
 
     def _fit_pca(self):
         """ Fit and apply PCA to train data. """
@@ -150,7 +153,7 @@ class TextureClassifier(object):
             labels = self.classifier.predict_proba(features)
         else:
             labels = self.classifier.predict(features)
-        return labels.tolist()
+        return labels.tolist(), features.tolist()
 
     def predict_label(self, patches, label, min_probability=0.5):
         """ Predict given label for given patches if label probability > min_probability.
@@ -159,19 +162,38 @@ class TextureClassifier(object):
             label (int): Trained class label.
             min_probability (float): Minimal probability for given class label to be predicted as True.
         Returns:
-            list: Boolean list of length n_patches with True = patch has given label with given min_probability,
-                  False otherwise.
+            list: Label probability per patch if label probability > given min_probability, else 0.
+
         """
         if len(patches) == 0:
             return []
-        proba = self.predict(patches, probability=self.with_probability)
-        if len(proba[0]) == 1:  # predicted labels instead of probabilities
-            return proba == label
+        proba, features = self.predict(patches, probability=self.with_probability)
+        if type(proba[0]) == int:  # predicted labels instead of probabilities
+            return [1 if p == label else 0 for p in proba], features
         else:
             label_idx = np.where(self.classifier.classes_ == label)[0][0]
-            return [p[label_idx] >= min_probability for p in proba]
+            return [p[label_idx] if p[label_idx] >= min_probability else 0 for p in proba], features
 
-    def detect(self, image, label, gridsize=40, min_feature_size=120, max_feature_size=400):
+    @staticmethod
+    def get_grid_patches(image, gridsize, patchsize):
+        """ Get image patches of size patchsize on gridpoints with given distance.
+        Args:
+            image (ndarray): Image.
+            gridsize (int): Distance between gridpoints.
+            patchsize (int): Size of cropped patches.
+        Returns:
+            list: Cropped patches.
+            list: X and Y indices of cropped patches.
+        """
+        patches = []
+        positions = []
+        for x in range(0, image.shape[1]-patchsize, gridsize):
+            for y in range(0, image.shape[0]-patchsize, gridsize):
+                patches.append(image[y:y+patchsize, x:x+patchsize])
+                positions.append([x+patchsize/2, y+patchsize/2])
+        return patches, positions
+
+    def detect(self, image, label, gridsize=40, min_feature_size=120, max_feature_size=400, min_probability=0.5):
         """ Detect features in given image.
         Args:
             image (ndarray): Image (should have same spacing as train data).
@@ -179,8 +201,18 @@ class TextureClassifier(object):
             gridsize (int, optional): Size of grid used to sample image patches.
             min_feature_size (int, optional): Minimal expected size of features to detect.
             max_feature_size (int, optional) Maximal expected size of features to detect.
+            min_probability (float): Minimal probability for given class label to be predicted as True.
+        Returns:
+            pandas.DataFrame: Detected landmarks with (x, y, size, feature_vector, probability)
         """
-        pass
+        patches, positions = self.get_grid_patches(image, gridsize, patchsize=(max_feature_size+min_feature_size)/2)
+        detected, features = self.predict_label(patches, label, min_probability=min_probability)
+        detected = np.array(detected)
+        XY = np.array(positions)[detected > 0]
+        probabilities = np.array(detected)[detected > 0].tolist()
+        features = np.array(features)[detected > 0].tolist()
+        return pd.DataFrame(data={"x":XY[:,0].tolist(), "y":XY[:,1].tolist(), "size":[(max_feature_size+min_feature_size)/2]*len(XY),
+                                  "feature_vector":features, "probability":probabilities})
 
     def save(self, filename, overwrite=False):
         """ Save trained classifier.
@@ -224,7 +256,6 @@ class HistogramFeatureExtractor(object):
             Returns:
                 list: List of patch features of length self.num_histogram_bins**2.
             """
-            #assert len(patches.shape) == 3, "Expected 3d array of form (N, height, width), got shape {}".format(patches.shape)
             features = []
             for patch in patches:
                 # build radius_img with same shape == patch.shape
