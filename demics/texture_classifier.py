@@ -4,12 +4,13 @@ import copy
 import numpy as np
 import pandas as pd
 import logging
+import time
 from imgaug import augmenters as iaa
 from sklearn.decomposition import PCA
 
-#TODO logging ?
 #TODO error handling, check for correct data(types)
 #TODO testing
+#TODO python3!!!!
 #TODO GridSearch / optimize_hyperparameter() ?
 #TODO split data into train / test / validation set ??
 #TODO module visualization ?
@@ -20,6 +21,7 @@ class TextureClassifier(object):
         """ Initialize. """
         self.num_histogram_bins = num_histogram_bins
         self.pca_dims = pca_dims
+        self.with_probability = probability
         self.classifier = svm.SVC(kernel=kernel, probability=probability)
         self.feature_extractor = HistogramFeatureExtractor(self.num_histogram_bins)
         self.pca = None
@@ -62,6 +64,8 @@ class TextureClassifier(object):
         """ Augment train patches. """
         if num_augmentations < 1:
             return
+        start = time.time()
+        self.logger.info("Start image augmentation...")
         self.augmentor = self._init_augmentor()
         augmented = []
         labels = []
@@ -74,23 +78,37 @@ class TextureClassifier(object):
             labels = labels + [label]*num_augmentations
         augmented_data = pd.DataFrame(data={"patches":augmented, "labels":labels, "augmented":[True]*len(labels)})
         self.traindata = self.traindata.append(augmented_data, ignore_index=True)
+        self.logger.info("Image augmentation took {} seconds. Number of patches after augmentation: {}".format(time.time()-start, len(self.traindata)))
 
     def _fit_pca(self):
         """ Fit and apply PCA to train data. """
+        start = time.time()
+        self.logger.info("Start fitting PCA...")
         pca = PCA(n_components=self.pca_dims)
         tmp = self.traindata["features"].values
         features = np.array([t for t in tmp])
         pca.fit(features)
         self.traindata["features"] = pd.Series(data=pca.transform(features).tolist())
         self.pca = pca
+        self.logger.info("Fitting PCA took {} seconds.".format(time.time()-start))
 
     def _apply_pca(self, features):
-        """ Apply trained PCA to new features. """
-        pass
+        """ Apply trained PCA to new features.
+        Args:
+            features (list): List of features with shape (n_samples, n_features).
+        Returns:
+            list: List of features with reduced dimensionality with shape (n_samples, n_components).
+        """
+        features = np.array([f for f in features])
+        transformed = self.pca.transform(features)
+        return transformed.tolist()
 
     def _fit_svm(self):
         """ Fit SVM to features generated from train data. """
+        start = time.time()
+        self.logger.info("Start fitting SVM...")
         self.classifier.fit([f for f in self.traindata["features"].values], [l for l in self.traindata["labels"].values])
+        self.logger.info("Fitting SVM took {} seconds.".format(time.time()-start))
 
     def train(self, patches, labels, num_augmentations=5):
         """ Train classifier.
@@ -104,27 +122,60 @@ class TextureClassifier(object):
         self._augment_patches(num_augmentations)
 
         # extract features from patches
+        start = time.time()
+        self.logger.info("Start feature extraction...")
         patches = self.traindata["patches"].values
         features = self.feature_extractor.extract_features(patches)
         self.traindata["features"] = pd.Series(data=features)
+        self.logger.info("Feature extraction took {} seconds.".format(time.time()-start))
 
         # fit PCA and SVM
         self._fit_pca()
         self._fit_svm()
 
-    def predict(self, patches):
+    def predict(self, patches, probability=False):
         """ Predict labels for given patches.
         Args:
             patches (list): List of 2D image patches.
+            probability (bool): Predict class probabilities if SVM was trained with probability=True.
         Returns:
-            list: Predicted labels of given patches.
+            list: Predicted labels for given patches with length n_patches.
+                  If probability: Predicted class probabilities for given patches with shape (n_patches, n_classes).
         """
-        pass
+        # extract features from patches
+        features = self.feature_extractor.extract_features(patches)
+        features = self._apply_pca(features)
+        features = np.array([f for f in features])
+        if probability and self.with_probability:
+            labels = self.classifier.predict_proba(features)
+        else:
+            labels = self.classifier.predict(features)
+        return labels.tolist()
 
-    def detect(self, image, gridsize=40, min_feature_size=120, max_feature_size=400):
+    def predict_label(self, patches, label, min_probability=0.5):
+        """ Predict given label for given patches if label probability > min_probability.
+        Args:
+            patches (list): List of 2D image patches.
+            label (int): Trained class label.
+            min_probability (float): Minimal probability for given class label to be predicted as True.
+        Returns:
+            list: Boolean list of length n_patches with True = patch has given label with given min_probability,
+                  False otherwise.
+        """
+        if len(patches) == 0:
+            return []
+        proba = self.predict(patches, probability=self.with_probability)
+        if len(proba[0]) == 1:  # predicted labels instead of probabilities
+            return proba == label
+        else:
+            label_idx = np.where(self.classifier.classes_ == label)[0][0]
+            return [p[label_idx] >= min_probability for p in proba]
+
+    def detect(self, image, label, gridsize=40, min_feature_size=120, max_feature_size=400):
         """ Detect features in given image.
         Args:
-            image (ndarray): Image.
+            image (ndarray): Image (should have same spacing as train data).
+            label (int): Label of class to be detected.
             gridsize (int, optional): Size of grid used to sample image patches.
             min_feature_size (int, optional): Minimal expected size of features to detect.
             max_feature_size (int, optional) Maximal expected size of features to detect.
@@ -142,6 +193,7 @@ class TextureClassifier(object):
             raise IOError("Given filename already exists. Set overwrite=True to overwrite existing file.")
         dictionary = {"num_histogram_bins":self.num_histogram_bins, "pca_dims":self.pca_dims, "svm": self.classifier, "pca": self.pca}
         pickle.dump(dictionary, open(filename,"w"))
+        self.logger.info("Saved classifier to {}".format(filename))
 
 
 class HistogramFeatureExtractor(object):
