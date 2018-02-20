@@ -14,7 +14,6 @@ from sklearn.decomposition import PCA
 #TODO GridSearch / optimize_hyperparameter() ?
 #TODO module visualization ?
 #TODO parallelize
-#TODO meanshift
 
 class TextureClassifier(object):
 
@@ -155,6 +154,7 @@ class TextureClassifier(object):
             labels = self.classifier.predict(features)
         return labels.tolist(), features.tolist()
 
+    #TODO check if given label is in classifier.classes_
     def predict_label(self, patches, label, min_probability=0.5):
         """ Predict given label for given patches if label probability > min_probability.
         Args:
@@ -176,14 +176,14 @@ class TextureClassifier(object):
 
     @staticmethod
     def get_grid_patches(image, gridsize, patchsize):
-        """ Get image patches of size patchsize on gridpoints with given distance.
+        """ Get image patches of size patchsize on gridpoints with given gridsize.
         Args:
             image (ndarray): Image.
             gridsize (int): Distance between gridpoints.
             patchsize (int): Size of cropped patches.
         Returns:
             list: Cropped patches.
-            list: X and Y indices of cropped patches.
+            list: X and Y coordinates of cropped patches.
         """
         patches = []
         positions = []
@@ -193,6 +193,9 @@ class TextureClassifier(object):
                 positions.append([x+patchsize/2, y+patchsize/2])
         return patches, positions
 
+    #TODO predict different patchsizes between min and max_feature_size?
+    #TODO MeanShift
+    #TODO check if given label is in classifier.classes_
     def detect(self, image, label, gridsize=40, min_feature_size=120, max_feature_size=400, min_probability=0.5):
         """ Detect features in given image.
         Args:
@@ -205,13 +208,14 @@ class TextureClassifier(object):
         Returns:
             pandas.DataFrame: Detected landmarks with (x, y, size, feature_vector, probability)
         """
-        patches, positions = self.get_grid_patches(image, gridsize, patchsize=(max_feature_size+min_feature_size)/2)
+        patchsize = (max_feature_size+min_feature_size)/2
+        patches, positions = self.get_grid_patches(image, gridsize, patchsize=patchsize)
         detected, features = self.predict_label(patches, label, min_probability=min_probability)
         detected = np.array(detected)
         XY = np.array(positions)[detected > 0]
         probabilities = np.array(detected)[detected > 0].tolist()
         features = np.array(features)[detected > 0].tolist()
-        return pd.DataFrame(data={"x":XY[:,0].tolist(), "y":XY[:,1].tolist(), "size":[(max_feature_size+min_feature_size)/2]*len(XY),
+        return pd.DataFrame(data={"x":XY[:,0].tolist(), "y":XY[:,1].tolist(), "size":[patchsize]*len(XY),
                                   "feature_vector":features, "probability":probabilities})
 
     def save(self, filename, overwrite=False):
@@ -249,6 +253,18 @@ class HistogramFeatureExtractor(object):
             """ Get copy of self.radius_img. """
             return copy.deepcopy(self.radius_img)
 
+        def _get_resized_radius_image(self, shape):
+            """ Get radius image with given shape. """
+            difference = (np.array(self.radius_img.shape) - np.array(shape))/2.
+            if (difference < 0).any():  # enlarge self.radius_img
+                self.radius_img = self._create_radius_image(max(shape)*1.5)
+            radius_img = self._get_radius_image()
+            if difference[0] > 0:
+                radius_img = radius_img[int(difference[0]):-int(difference[0]+0.5),:]
+            if difference[1] > 0:
+                radius_img = radius_img[:,int(difference[1]):-int(difference[1]+0.5)]
+            return radius_img
+
         def extract_features(self, patches):
             """ Extract 2D histogram features from given patches.
             Args:
@@ -258,15 +274,7 @@ class HistogramFeatureExtractor(object):
             """
             features = []
             for patch in patches:
-                # build radius_img with same shape == patch.shape
-                difference = (np.array(self.radius_img.shape) - np.array(patch.shape))/2.
-                if (difference < 0).any():  # enlarge radius_img
-                    self.radius_img = self._create_radius_image(max(patch.shape)*1.5)
-                radius_img = self._get_radius_image()
-                if difference[0] > 0:
-                    radius_img = radius_img[int(difference[0]):-int(difference[0]+0.5),:]
-                if difference[1] > 0:
-                    radius_img = radius_img[:,int(difference[1]):-int(difference[1]+0.5)]
+                radius_img = self._get_resized_radius_image(patch.shape)
                 assert patch.shape == radius_img.shape, "ERROR: patch.shape ({}) != radiusImg.shape ({})".format(patch.shape, radius_img.shape)
                 # calculate and normalize 2D histogram
                 hist, _, _ = np.histogram2d(radius_img.flatten(), patch.flatten(), bins=[self.num_histogram_bins,np.linspace(0,256,num=self.num_histogram_bins+1)])
