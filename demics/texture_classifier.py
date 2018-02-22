@@ -1,4 +1,5 @@
 from sklearn import svm
+from sklearn.model_selection import GridSearchCV
 import os
 import copy
 import numpy as np
@@ -8,7 +9,7 @@ import time
 from imgaug import augmenters as iaa
 from sklearn.decomposition import PCA
 
-#TODO error handling, check for correct data(types) (uint8)
+#TODO error handling, check for correct data(types) (uint8 esp. for training)
 #TODO testing
 #TODO python3!!!!
 #TODO GridSearch / optimize_hyperparameter() ?
@@ -36,10 +37,13 @@ class TextureClassifier(object):
         """
         import pickle
         dictionary = pickle.load(open(filename))
-        #obj = cls(dictionary["histogram_bins"], dictionary["numFeatures"]) # old names (from old classifiers)...
-        obj = cls(dictionary["num_histogram_bins"], dictionary["pca_dims"])
+        obj = cls(dictionary["histogram_bins"], dictionary["numFeatures"])  # old names (from old classifiers)...
+        #obj = cls(dictionary["num_histogram_bins"], dictionary["pca_dims"])
         obj.pca = dictionary["pca"]
-        obj.classifier = dictionary["svm"]
+        if type(dictionary["svm"]) == GridSearchCV:
+            obj.classifier = dictionary["svm"].best_estimator_   # for old classifiers
+        else:
+            obj.classifier = dictionary["svm"]
         obj.with_probability = obj.classifier.probability
         return obj
 
@@ -109,7 +113,14 @@ class TextureClassifier(object):
         """ Fit SVM to features generated from train data. """
         start = time.time()
         self.logger.info("Start fitting SVM...")
-        self.classifier.fit([f for f in self.traindata["features"].values], [l for l in self.traindata["labels"].values])
+        #TODO inwiefern soll grid search durch benutzer steuerbar sein? -> methode (_?)optimize_hyperparameter()?
+        param_grid = {"C": 10.**np.arange(-3, 8), "gamma": 10.**np.arange(-5, 4)}
+        sv = GridSearchCV(self.classifier, param_grid, cv=3, refit=True, n_jobs=-1)  # with 3fold cross_validation
+        sv.fit([f for f in self.traindata["features"].values], [l for l in self.traindata["labels"].values])
+        #self.classifier.fit([f for f in self.traindata["features"].values], [l for l in self.traindata["labels"].values])
+        print "Best parameters:",sv.best_params_
+        print "Best score:",sv.best_score_
+        self.classifier = sv.best_estimator_
         self.logger.info("Fitting SVM took {} seconds.".format(time.time()-start))
 
     def train(self, patches, labels, num_augmentations=5):
@@ -154,7 +165,6 @@ class TextureClassifier(object):
             labels = self.classifier.predict(features)
         return labels.tolist(), features.tolist()
 
-    #TODO check if given label is in classifier.classes_
     def predict_label(self, patches, label, min_probability=0.5):
         """ Predict given label for given patches if label probability > min_probability.
         Args:
@@ -165,6 +175,7 @@ class TextureClassifier(object):
             list: Label probability per patch if label probability > given min_probability, else 0.
 
         """
+        assert label in self.classifier.classes_, "Given class label {} has not been trained. Trained class labels are: {}".format(label, self.classifier.classes_)
         if len(patches) == 0:
             return []
         proba, features = self.predict(patches, probability=self.with_probability)
@@ -175,28 +186,27 @@ class TextureClassifier(object):
             return [p[label_idx] if p[label_idx] >= min_probability else 0 for p in proba], features
 
     @staticmethod
-    def get_grid_patches(image, gridsize, patchsize):
+    def get_grid_patches(image, gridsize, patchsize, gridpoints=None):
         """ Get image patches of size patchsize on gridpoints with given gridsize.
         Args:
             image (ndarray): Image.
             gridsize (int): Distance between gridpoints.
             patchsize (int): Size of cropped patches.
+            gridpoints (list, optional): Predefined gridpoint coordinates in form [[x1,y1],[x2,y2],...].
         Returns:
             list: Cropped patches.
             list: X and Y coordinates of cropped patches.
         """
         patches = []
-        positions = []
-        for x in range(0, image.shape[1]-patchsize, gridsize):
-            for y in range(0, image.shape[0]-patchsize, gridsize):
-                patches.append(image[y:y+patchsize, x:x+patchsize])
-                positions.append([x+patchsize/2, y+patchsize/2])
-        return patches, positions
+        if gridpoints is None:
+            gridpoints = [[x,y] for x in range(patchsize/2, image.shape[1]-patchsize/2, gridsize)
+                                for y in range(patchsize/2, image.shape[0]-patchsize/2, gridsize)]
+        for x,y in gridpoints:
+            patches.append(image[y-patchsize/2:y+patchsize/2, x-patchsize/2:x+patchsize/2])
+        return patches, gridpoints
 
-    #TODO predict different patchsizes between min and max_feature_size?
     #TODO MeanShift
-    #TODO check if given label is in classifier.classes_
-    def detect(self, image, label, gridsize=40, min_feature_size=120, max_feature_size=400, min_probability=0.5):
+    def detect(self, image, label, gridsize=40, min_feature_size=24, max_feature_size=80, min_probability=0.5):
         """ Detect features in given image.
         Args:
             image (ndarray): Image (should have same spacing as train data).
@@ -208,13 +218,25 @@ class TextureClassifier(object):
         Returns:
             pandas.DataFrame: Detected landmarks with (x, y, size, feature_vector, probability)
         """
-        patchsize = (max_feature_size+min_feature_size)/2
-        patches, positions = self.get_grid_patches(image, gridsize, patchsize=patchsize)
-        detected, features = self.predict_label(patches, label, min_probability=min_probability)
-        detected = np.array(detected)
-        XY = np.array(positions)[detected > 0]
-        probabilities = np.array(detected)[detected > 0].tolist()
-        features = np.array(features)[detected > 0].tolist()
+        assert label in self.classifier.classes_, "Given class label {} has not been trained. Trained class labels are: {}".format(label, self.classifier.classes_)
+        assert image.dtype == np.uint8, "Given image must be of type uint8, but is type: {}".format(image.dtype)
+        num_steps = 6
+        min_detections = 2
+        gridpoints = None  # in first call of get_grid_patches, gridsize is None to define new grid
+        for patchsize in np.linspace(max_feature_size, min_feature_size, num_steps, dtype=np.uint8):
+            print patchsize
+            patches, gridpoints = self.get_grid_patches(image, gridsize, patchsize=patchsize, gridpoints=gridpoints)
+            detected, features = self.predict_label(patches, label, min_probability=min_probability)
+            detected = np.array(detected)
+            detected[detected > 0] = 1
+            if patchsize == max_feature_size:
+                detected_sum = detected.astype(np.uint8)  # Initialize detected_sum
+            else:
+                detected_sum += detected.astype(np.uint8)  # sum up scores in detected
+        XY = np.array(gridpoints)[detected_sum >= min_detections]  # at least 2 detections in num_steps scales
+        # TODO calculate proper probas, features and sizes!!
+        probabilities = np.array(detected_sum)[detected_sum >= min_detections].tolist()
+        features = np.array(features)[detected_sum >= min_detections].tolist()
         return pd.DataFrame(data={"x":XY[:,0].tolist(), "y":XY[:,1].tolist(), "size":[patchsize]*len(XY),
                                   "feature_vector":features, "probability":probabilities})
 
@@ -227,7 +249,10 @@ class TextureClassifier(object):
         import pickle
         if not overwrite and os.path.exists(filename):
             raise IOError("Given filename already exists. Set overwrite=True to overwrite existing file.")
-        dictionary = {"num_histogram_bins":self.num_histogram_bins, "pca_dims":self.pca_dims, "svm": self.classifier, "pca": self.pca}
+        #dictionary = {"num_histogram_bins":self.num_histogram_bins, "pca_dims":self.pca_dims, "svm": self.classifier, "pca": self.pca}
+        # old format:
+        dictionary = {"histogram_bins":self.num_histogram_bins, "numFeatures":self.pca_dims, "svm": self.classifier, "pca": self.pca,
+                      "labels":{"vessels":1,"bg":0}, "train_spacing":0.5, "defaultFeatureSizes":{"vessels":[150,400]}}
         pickle.dump(dictionary, open(filename,"w"))
         self.logger.info("Saved classifier to {}".format(filename))
 
