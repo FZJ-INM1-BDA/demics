@@ -153,6 +153,7 @@ class TextureClassifier(object):
         Args:
             patches (list): List of train patches.
             labels (list) Labels according to given patch list.
+            num_augmentations (int, optional): Number of augmentations per given training patch (default: 5).
         """
         assert len(patches) == len(labels), "Length of label list and length of patch list must be equal."
         # save original and augmented train data
@@ -179,7 +180,8 @@ class TextureClassifier(object):
         Args:
             patches (list): List of 2D image patches.
         Returns:
-            list: Predicted labels for given patches with length n_patches.
+            ndarray: Predicted labels for given patches with shape (n_patches,1).
+            ndarray: Class scores for given patches with shape (n_patches,n_classes).
         """
         # extract features from patches
         features = self.feature_extractor.extract_features(patches)
@@ -189,6 +191,7 @@ class TextureClassifier(object):
         return np.argmax(scores,axis=1), scores
 
     #TODO MeanShift
+    #TODO needed?? instead grid_coordinates() + extract_patches() + predict() would be possible...
     def detect(self, image, label, gridsize=40, min_feature_size=24, max_feature_size=80, min_probability=0.5):
         """ Detect features in given image.
         Args:
