@@ -2,7 +2,7 @@
 ## Usage
 Train classifier:
 ```python
-classifier = HistogramSVM(num_bins=10, pca_dims=10)
+classifier = TextureClassifier(num_bins=10, pca_dims=10)
 patches = [p1,p2,...,n1,n2,...] # patches of different classes
 labels = [1,1,...,0,0,...] # label per patch
 classifier.train(patches, labels, num_augmentations=2)
