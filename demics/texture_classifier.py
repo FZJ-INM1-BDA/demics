@@ -22,8 +22,9 @@ def grid_coordinates(shape, gridsize, offset=None):
         shape(array-like): Shape of image.
         gridsize(int): Size of grid (distance between neighboring gridpoints).
         offset(int, optional): Offset of first gridpoint in x and y direction (default: gridsize/2).
-    Returns a list of x,y coordinates, representing the nodes of a regular grid
-    with size 'gridsize' on an image with the given shape.
+    Returns:
+        list of x,y coordinates, representing the nodes of a regular grid
+        with size 'gridsize' on an image with the given shape.
     """
     if offset is None:
         offset = gridsize//2
@@ -46,7 +47,7 @@ def extract_patches(image, coordinates, patchsize):
 
 
 class TextureClassifier(object):
-    """ A trainable multi-label image feature classifier based histograms of the
+    """ A trainable multi-label image feature classifier based on 2D-histograms of the
     local image patch.
     """
 
@@ -72,7 +73,7 @@ class TextureClassifier(object):
         dictionary = pickle.load(open(filename))
         obj = cls(dictionary["histogram_bins"], dictionary["numFeatures"])  # old names (from old classifiers)...
         #obj = cls(dictionary["num_histogram_bins"], dictionary["pca_dims"])
-        obj.pca = dictionary["pca"]
+        obj._pca = dictionary["pca"]
         if type(dictionary["svm"]) == GridSearchCV:
             obj.classifier = dictionary["svm"].best_estimator_   # for old classifiers
         else:
