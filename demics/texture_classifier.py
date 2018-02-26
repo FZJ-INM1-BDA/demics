@@ -1,3 +1,4 @@
+from __future__ import print_function, division, absolute_import
 from sklearn import svm
 from sklearn.model_selection import GridSearchCV
 import os
@@ -11,41 +12,45 @@ from sklearn.decomposition import PCA
 
 #TODO error handling, check for correct data(types) (uint8 esp. for training)
 #TODO testing
-#TODO python3!!!!
 #TODO GridSearch / optimize_hyperparameter() ?
 #TODO module visualization ?
 #TODO parallelize
 
-def grid_coordinates(shape, gridsize, offset):
-    """
+def grid_coordinates(shape, gridsize, offset=None):
+    """ Create regular grid with size 'gridsize' for image with given shape.
+    Args:
+        shape(array-like): Shape of image.
+        gridsize(int): Size of grid (distance between neighboring gridpoints).
+        offset(int, optional): Offset of first gridpoint in x and y direction (default: gridsize/2).
     Returns a list of x,y coordinates, representing the nodes of a regular grid
     with size 'gridsize' on an image with the given shape.
     """
+    if offset is None:
+        offset = gridsize//2
     return [[x,y] for x in range(offset, shape[1]-offset, gridsize)
             for y in range(offset, shape[0]-offset, gridsize)]
 
 def extract_patches(image, coordinates, patchsize):
-    """ Extract image patches of size patchsize at the given coordinates
+    """ Extract image patches of size patchsize at the given coordinates.
     Args:
         image (ndarray): Image.
         coordinates (list): Predefined gridpoint coordinates in form [[x1,y1],[x2,y2],...].
-        patchsize (int): Size of cropped patches.
+        patchsize (int): Size of extracted patches.
     Returns:
-        list: Cropped patches.
+        list: Extracted patches.
     """
     patches = []
     for x,y in (np.asarray(coordinates)+.5).astype(int):
-        patches.append(image[y-patchsize/2:y+patchsize/2, x-patchsize/2:x+patchsize/2])
+        patches.append(image[y-patchsize//2:y+patchsize//2, x-patchsize//2:x+patchsize//2])
     return patches
 
 
 class TextureClassifier(object):
-    """
-    A trainable multi-label image feature classifier based histograms of the
+    """ A trainable multi-label image feature classifier based histograms of the
     local image patch.
     """
 
-    def __init__(self, num_histogram_bins=10, pca_dims=10, kernel="rbf" ):
+    def __init__(self, num_histogram_bins=10, pca_dims=10, kernel="rbf"):
         """ Initialize. """
         self.num_histogram_bins = num_histogram_bins
         self.pca_dims = pca_dims
@@ -60,6 +65,8 @@ class TextureClassifier(object):
         """ Load trained classifier from pickle file.
         Args:
             filename (str): Filename containing pickled classifier.
+        Returns:
+            Object of class TextureClassifier
         """
         import pickle
         dictionary = pickle.load(open(filename))
@@ -143,8 +150,8 @@ class TextureClassifier(object):
         sv = GridSearchCV(self.classifier, param_grid, cv=3, refit=True, n_jobs=-1)  # with 3fold cross_validation
         sv.fit([f for f in self.trainingdata["features"].values], [l for l in self.trainingdata["labels"].values])
         #self.classifier.fit([f for f in self.trainingdata["features"].values], [l for l in self.trainingdata["labels"].values])
-        print "Best parameters:",sv.best_params_
-        print "Best score:",sv.best_score_
+        self._logger.info("Best parameters:",sv.best_params_)
+        self._logger.info("Best score:",sv.best_score_)
         self.classifier = sv.best_estimator_
         self._logger.info("Fitting SVM took {} seconds.".format(time.time()-start))
 
@@ -158,8 +165,8 @@ class TextureClassifier(object):
         assert len(patches) == len(labels), "Length of label list and length of patch list must be equal."
         # save original and augmented train data
         self.trainingdata = pd.DataFrame(data={
-            "patches":patches, 
-            "labels":labels, 
+            "patches":patches,
+            "labels":labels,
             "augmented":[False]*len(labels)})
         self._augment_patches(num_augmentations)
 
@@ -208,7 +215,7 @@ class TextureClassifier(object):
         assert image.dtype == np.uint8, "Given image must be of type uint8, but is type: {}".format(image.dtype)
         num_steps = 6
         min_detections = 2
-        grid_coords = grid_coordinates(image.shape, gridsize, offset=max_feature_size/2)
+        grid_coords = grid_coordinates(image.shape, gridsize, offset=max_feature_size//2)
         for patchsize in np.linspace(max_feature_size, min_feature_size, num_steps, dtype=np.uint8):
             patches = extract_patches(image, grid_coords, patchsize=patchsize )
             detected, features = self.predict_label(patches, label, min_probability=min_probability)
