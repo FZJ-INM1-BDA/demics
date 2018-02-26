@@ -115,8 +115,8 @@ class TextureClassifier(object):
             labels = labels + [label]*num_augmentations
         augmented_data = pd.DataFrame(data={"patches":augmented, "labels":labels, "augmented":[True]*len(labels)})
         self.trainingdata = self.trainingdata.append(augmented_data, ignore_index=True)
-        self._logger.info("Image augmentation took {} seconds. Number of patches after augmentation: {}".format(time.time()-start,
-                                                                                                               len(self.trainingdata)))
+        self._logger.info("Image augmentation took {} seconds. Number of patches after augmentation: {}".
+                          format(time.time()-start, len(self.trainingdata)))
 
     def _fit_pca(self):
         """ Fit and apply PCA to train data. """
@@ -149,9 +149,9 @@ class TextureClassifier(object):
         param_grid = {"C": 10.**np.arange(-3, 8), "gamma": 10.**np.arange(-5, 4)}
         sv = GridSearchCV(self.classifier, param_grid, cv=3, refit=True, n_jobs=-1)  # with 3fold cross_validation
         sv.fit([f for f in self.trainingdata["features"].values], [l for l in self.trainingdata["labels"].values])
-        #self.classifier.fit([f for f in self.trainingdata["features"].values], [l for l in self.trainingdata["labels"].values])
-        self._logger.info("Best parameters:",sv.best_params_)
-        self._logger.info("Best score:",sv.best_score_)
+        self.classifier.fit([f for f in self.trainingdata["features"].values], [l for l in self.trainingdata["labels"].values])
+        self._logger.info("Best parameters: {}".format(sv.best_params_))
+        self._logger.info("Best score: {}".format(sv.best_score_))
         self.classifier = sv.best_estimator_
         self._logger.info("Fitting SVM took {} seconds.".format(time.time()-start))
 
@@ -217,7 +217,7 @@ class TextureClassifier(object):
         min_detections = 2
         grid_coords = grid_coordinates(image.shape, gridsize, offset=max_feature_size//2)
         for patchsize in np.linspace(max_feature_size, min_feature_size, num_steps, dtype=np.uint8):
-            patches = extract_patches(image, grid_coords, patchsize=patchsize )
+            patches = extract_patches(image, grid_coords, patchsize=patchsize)
             detected, features = self.predict_label(patches, label, min_probability=min_probability)
             detected = np.array(detected)
             detected[detected > 0] = 1
