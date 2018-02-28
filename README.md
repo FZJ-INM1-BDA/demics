@@ -19,7 +19,7 @@ pip install .
 ```
 
 ## Development
-Clone colamatch from github and install with with option -e, so that now reinstallation is needed for every update.
+Clone colamatch from github and install with option -e, so that no reinstallation is needed for every update.
 ```bash
 git clone https://github.com/FZJ-INM1-BDA/colamatch.git
 cd colamatch
@@ -31,9 +31,9 @@ pip install -e .
 ## Usage
 Train classifier:
 ```python
-classifier = TextureClassifier(num_bins=10, pca_dims=10)
-patches = [p1,p2,...,n1,n2,...] # patches of different classes
-labels = [1,1,...,0,0,...] # label per patch
+classifier = TextureClassifier(num_histogram_bins=10, pca_dims=10)
+patches = [p1,p2,...,n1,n2,...]  # patches of different classes
+labels = [1,1,...,0,0,...]  # label per patch
 classifier.train(patches, labels, num_augmentations=2)
 classifier.save("demics_classifier.p")
 ```
@@ -41,9 +41,8 @@ classifier.save("demics_classifier.p")
 Predict image patches:
 ```python
 classifier = TextureClassifier.load("demics_classifier.p")
-candidates = [c1, c2, ...] # patches
-labels = classifier.predict(candidates)
-label_probabilities = classifier.predict_label(candidates, label=1, min_probability=0.5)
+candidates = [c1, c2, ...]  # patches
+labels, scores = classifier.predict(candidates)
 ```
 
 Detect features in image:
