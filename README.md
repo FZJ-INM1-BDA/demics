@@ -12,17 +12,17 @@
 Clone the repository from github and install with pip:
 
 ```bash
-git clone https://github.com/FZJ-INM1-BDA/colamatch.git
-cd colamatch
+git clone https://github.com/FZJ-INM1-BDA/demics.git
+cd demics
 pip install -r requirements.txt
 pip install .
 ```
 
 ## Development
-Clone colamatch from github and install with option -e, so that no reinstallation is needed for every update.
+Clone demics from github and install with option -e, so that no reinstallation is needed for every update.
 ```bash
-git clone https://github.com/FZJ-INM1-BDA/colamatch.git
-cd colamatch
+git clone https://github.com/FZJ-INM1-BDA/demics.git
+cd demics
 # git checkout develop
 pip install -r requirements.txt
 pip install -e .
