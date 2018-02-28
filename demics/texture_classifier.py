@@ -15,6 +15,7 @@ from sklearn.decomposition import PCA
 #TODO GridSearch / optimize_hyperparameter() ?
 #TODO module visualization ?
 #TODO parallelize
+#NOTE spacing must be managed outside of this library, inside all distances / sizes are in pixel
 
 def grid_coordinates(shape, gridsize, offset=None):
     """ Create regular grid with size 'gridsize' for image with given shape.
@@ -198,40 +199,42 @@ class TextureClassifier(object):
         scores = self.classifier.predict_proba(features)
         return np.argmax(scores,axis=1), scores
 
-    #TODO MeanShift
+    #TODO MeanShift?
     #TODO needed?? instead grid_coordinates() + extract_patches() + predict() would be possible...
     def detect(self, image, label, gridsize=40, min_feature_size=24, max_feature_size=80, min_probability=0.5):
-        """ Detect features in given image.
+        """ Detect multi-scale features of class 'label' in given image.
+        The given image is scanned with a sliding window in different window sizes (6 sizes between 'min_feature_size'
+        and 'max_feature_size'). For each gridpoint, patches in all sizes will be predicted and the gridpoint coordinates saved as
+        detection if at least 2 patches / patchsizes have a score higher than the given min_probability.
         Args:
             image (ndarray): Image (should have same spacing as train data).
             label (int): Label of class to be detected.
-            gridsize (int, optional): Size of grid used to sample image patches.
-            min_feature_size (int, optional): Minimal expected size of features to detect.
-            max_feature_size (int, optional) Maximal expected size of features to detect.
+            gridsize (int, optional): Size of grid used to sample image patches (in pixel).
+            min_feature_size (int, optional): Minimal expected size of features to detect (in pixel).
+            max_feature_size (int, optional) Maximal expected size of features to detect (in pixel).
             min_probability (float): Minimal probability for given class label to be predicted as True.
         Returns:
-            pandas.DataFrame: Detected landmarks with (x, y, size, feature_vector, probability)
+            pandas.DataFrame: Detected landmarks with (x, y, size, probability)
         """
         assert label in self.classifier.classes_, "Given class label {} has not been trained. Trained class labels are: {}".format(label, self.classifier.classes_)
         assert image.dtype == np.uint8, "Given image must be of type uint8, but is type: {}".format(image.dtype)
+        label_idx = np.where(self.classifier.classes_ == label)[0][0]   # index of given label in class list
         num_steps = 6
         min_detections = 2
         grid_coords = grid_coordinates(image.shape, gridsize, offset=max_feature_size//2)
+        detected_sum = np.zeros(len(grid_coords))
+        score_sum = np.zeros(len(grid_coords))
         for patchsize in np.linspace(max_feature_size, min_feature_size, num_steps, dtype=np.uint8):
             patches = extract_patches(image, grid_coords, patchsize=patchsize)
-            detected, features = self.predict_label(patches, label, min_probability=min_probability)
-            detected = np.array(detected)
-            detected[detected > 0] = 1
-            if patchsize == max_feature_size:
-                detected_sum = detected.astype(np.uint8)  # Initialize detected_sum
-            else:
-                detected_sum += detected.astype(np.uint8)  # sum up scores in detected
+            labels, scores = self.predict(patches)
+            score_sum += scores[:,label_idx]
+            detected = np.array([1 if p[label_idx] >= min_probability else 0 for p in scores])
+            detected_sum += detected.astype(np.uint8)  # sum up scores in detected
         XY = np.array(grid_coords)[detected_sum >= min_detections]  # at least 2 detections in num_steps scales
-        # TODO calculate proper probas, features and sizes!!
-        probabilities = np.array(detected_sum)[detected_sum >= min_detections].tolist()
-        features = np.array(features)[detected_sum >= min_detections].tolist()
+        # TODO calculate proper scores and sizes!!
+        scores = score_sum[detected_sum >= min_detections]/num_steps  # stimmt das so? nicht nur die scales, die auch detektiert wurden? oder nur beste scale?
         return pd.DataFrame(data={"x":XY[:,0].tolist(), "y":XY[:,1].tolist(), "size":[patchsize]*len(XY),
-                                  "feature_vector":features, "probability":probabilities})
+                                  "probability":scores.tolist()})
 
     def save(self, filename, overwrite=False):
         """ Save trained classifier.
