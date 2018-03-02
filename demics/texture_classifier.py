@@ -71,6 +71,7 @@ class TextureClassifier(object):
             Object of class TextureClassifier
         """
         import pickle
+	#TODO pickle.load does not work in python3...
         dictionary = pickle.load(open(filename))
         obj = cls(dictionary["histogram_bins"], dictionary["numFeatures"])  # old names (from old classifiers)...
         #obj = cls(dictionary["num_histogram_bins"], dictionary["pca_dims"])
