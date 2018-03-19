@@ -15,6 +15,7 @@ from sklearn.decomposition import PCA
 #TODO GridSearch / optimize_hyperparameter() ?
 #TODO module visualization ?
 #TODO parallelize
+
 #NOTE spacing must be managed outside of this library, inside all distances / sizes are in pixel
 
 def grid_coordinates(shape, gridsize, offset=None):
@@ -48,10 +49,18 @@ def extract_patches(image, coordinates, patchsize):
 
 
 class TextureClassifier(object):
-    """ A trainable multi-label image feature classifier based on 2D-histograms of the
-    local image patch.
+    """ A trainable multi-label image feature classifier based on a Support Vector Machine.
+
+    This class uses the below defined class HistogramFeatureExtractor to create feature vectors
+    out of local image patches. The feature extraction is based on 2D-Histograms (with 'num_histogram_bins'
+    bins per dimensionality).
+    The dimensionality of the resulting feature vectors is reduced to 'pca_dims' dimensions
+    using Principal Component Analysis (PCA).
+    With the resulting low-dimensionality feature vectors, a Support Vector Machine (SVM) is trained.
+    Prediction and detection methods can then be used to predict image patched or detect features in images.
     """
 
+    # NOTE should there be a parameter 'feature_extractor' to pass a function that extracts the features from patches?
     def __init__(self, num_histogram_bins=10, pca_dims=10, kernel="rbf"):
         """ Initialize. """
         self.num_histogram_bins = num_histogram_bins
