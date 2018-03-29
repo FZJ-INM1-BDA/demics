@@ -34,6 +34,10 @@ Train classifier:
 classifier = TextureClassifier(num_histogram_bins=10, pca_dims=10)
 patches = [p1,p2,...,n1,n2,...]  # patches of different classes
 labels = [1,1,...,0,0,...]  # label per patch
+# optional: define parameters for Grid Search
+param_grid = {"C": 10.**np.arange(-3, 8), "gamma": 10.**np.arange(-5, 4)}
+classifier.grid_search(param_grid, n_jobs=-1, cv=3, refit=True)
+# start training (with Grid Search if defined)
 classifier.train(patches, labels, num_augmentations=2)
 classifier.save("demics_classifier.p")
 ```
