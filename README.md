@@ -52,5 +52,6 @@ labels, scores = classifier.predict(candidates)
 
 Detect features in image:
 ```python
-detections = classifier.detect(img, label=1, gridsize=40, min_feature_size=120, max_feature_size=400, min_probability=0.7)
+detections = classifier.detect(img, label=1, gridsize=40, min_feature_size=120, 
+                               max_feature_size=400, min_probability=0.7)
 ```
