@@ -153,7 +153,7 @@ class TextureClassifier(object):
         transformed = self._pca.transform(features)
         return transformed.tolist()
 
-    def grid_search(self, param_grid, n_jobs, cv=None, refit=True):
+    def grid_search(self, param_grid, n_jobs, cv=None, refit=True, verbose=0):
         """ Use Grid Search to optimize hyperparameters.
         Args:
             param_grid (dictionary): Dictionary with parameters names (string) as keys and
@@ -165,8 +165,9 @@ class TextureClassifier(object):
                                 * An object to be used as a cross-validation generator.
                                 * An iterable yielding train, test splits.
             refit (bool, optional): Refit an estimator using the best found parameters on the whole dataset.
+            verbose (int, optional): Controls the verbosity: the higher, the more messages.
         """
-        self.classifier = GridSearchCV(self.classifier, param_grid, cv=cv, refit=refit, n_jobs=n_jobs)
+        self.classifier = GridSearchCV(self.classifier, param_grid, cv=cv, refit=refit, n_jobs=n_jobs, verbose=verbose)
 
     def _fit_svm(self):
         """ Fit SVM to features generated from train data. """
