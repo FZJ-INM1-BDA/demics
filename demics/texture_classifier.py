@@ -10,11 +10,9 @@ import time
 from imgaug import augmenters as iaa
 from sklearn.decomposition import PCA
 
-#TODO error handling, check for correct data(types) (uint8 esp. for training)
-#TODO testing
-#TODO GridSearch / optimize_hyperparameter() ?
 #TODO module visualization ?
-#TODO parallelize
+#TODO parallelization
+
 #NOTE spacing must be managed outside of this library, inside all distances / sizes are in pixel
 
 def grid_coordinates(shape, gridsize, offset=None):
@@ -48,12 +46,28 @@ def extract_patches(image, coordinates, patchsize):
 
 
 class TextureClassifier(object):
-    """ A trainable multi-label image feature classifier based on 2D-histograms of the
-    local image patch.
+    """ A trainable multi-label image feature classifier based on a Support Vector Machine.
+
+    This class uses the below defined class HistogramFeatureExtractor to create feature vectors
+    out of local image patches. The feature extraction is based on 2D-Histograms (with 'num_histogram_bins'
+    bins per dimensionality).
+    The dimensionality of the resulting feature vectors is reduced to 'pca_dims' dimensions
+    using Principal Component Analysis (PCA).
+    With the resulting low-dimensionality feature vectors, a Support Vector Machine (SVM) is trained.
+    Prediction and detection methods can then be used to predict image patched or detect features in images.
     """
 
+    # NOTE should there be a parameter 'feature_extractor' to pass a function that extracts the features from patches?
     def __init__(self, num_histogram_bins=10, pca_dims=10, kernel="rbf"):
-        """ Initialize. """
+        """ Initialize.
+        Args:
+            num_histogram_bins (int, optional): Number of histogram bins for 2D histogram feature extraction.
+                Default is 10.
+            pca_dims (int, optional): Number of featue dimensions after Prinical Component Analysis.
+                Default is 10.
+            kernel (str, optional): Specifies the kernel type to be used in the algorithm. It must be
+                one of 'linear', 'poly', 'rbf', 'sigmoid', 'precomputed' or a callable. Default is 'rbf'.
+        """
         self.num_histogram_bins = num_histogram_bins
         self.pca_dims = pca_dims
         self.classifier = svm.SVC(kernel=kernel, probability=True)
@@ -71,22 +85,17 @@ class TextureClassifier(object):
             Object of class TextureClassifier
         """
         import pickle
-	#TODO pickle.load does not work in python3...
-        dictionary = pickle.load(open(filename))
-        obj = cls(dictionary["histogram_bins"], dictionary["numFeatures"])  # old names (from old classifiers)...
-        #obj = cls(dictionary["num_histogram_bins"], dictionary["pca_dims"])
+        dictionary = pickle.load(open(filename,"rb"))
+        obj = cls(dictionary["num_histogram_bins"], dictionary["pca_dims"])
         obj._pca = dictionary["pca"]
-        if type(dictionary["svm"]) == GridSearchCV:
-            obj.classifier = dictionary["svm"].best_estimator_   # for old classifiers
-        else:
-            obj.classifier = dictionary["svm"]
+        obj.classifier = dictionary["svm"]
         return obj
 
     @staticmethod
     def _init_augmentor():
         """ Init image augmentor. """
         st = lambda aug: iaa.Sometimes(0.5, aug)
-        augmentor = iaa.Sequential([iaa.Crop(px=(0, 25)),  # crop images from each side by 0 to 16px (randomly chosen)
+        augmentor = iaa.Sequential([iaa.Crop(px=(0, 25)),  # crop images from each side by 0 to 25px (randomly chosen)
                                     iaa.Fliplr(0.5),       # horizontally flip 50% of the images
                                     iaa.Flipud(0.5),
                                     st(iaa.Add((-80,40),per_channel=False)),
@@ -144,18 +153,32 @@ class TextureClassifier(object):
         transformed = self._pca.transform(features)
         return transformed.tolist()
 
+    def grid_search(self, param_grid, n_jobs, cv=None, refit=True, verbose=0):
+        """ Use Grid Search to optimize hyperparameters.
+        Args:
+            param_grid (dictionary): Dictionary with parameters names (string) as keys and
+                                     lists of parameter settings to try as values.
+            n_jobs (int): Number of jobs to run in parallel.
+            cv (int, optional): Determines the cross-validation splitting strategy. Possible inputs for cv are:
+                                * None, to use the default 3-fold cross validation,
+                                * integer, to specify the number of folds in a (Stratified)KFold,
+                                * An object to be used as a cross-validation generator.
+                                * An iterable yielding train, test splits.
+            refit (bool, optional): Refit an estimator using the best found parameters on the whole dataset.
+            verbose (int, optional): Controls the verbosity: the higher, the more messages.
+        """
+        self.classifier = GridSearchCV(self.classifier, param_grid, cv=cv, refit=refit, n_jobs=n_jobs, verbose=verbose)
+
     def _fit_svm(self):
         """ Fit SVM to features generated from train data. """
         start = time.time()
         self._logger.info("Start fitting SVM...")
-        #TODO inwiefern soll grid search durch benutzer steuerbar sein? -> methode (_?)optimize_hyperparameter()?
-        param_grid = {"C": 10.**np.arange(-3, 8), "gamma": 10.**np.arange(-5, 4)}
-        sv = GridSearchCV(self.classifier, param_grid, cv=3, refit=True, n_jobs=-1)  # with 3fold cross_validation
-        sv.fit([f for f in self.trainingdata["features"].values], [l for l in self.trainingdata["labels"].values])
-        self.classifier.fit([f for f in self.trainingdata["features"].values], [l for l in self.trainingdata["labels"].values])
-        self._logger.info("Best parameters: {}".format(sv.best_params_))
-        self._logger.info("Best score: {}".format(sv.best_score_))
-        self.classifier = sv.best_estimator_
+        self.classifier.fit(list(self.trainingdata["features"].values),
+                            list(self.trainingdata["labels"].values))
+        if type(self.classifier) == GridSearchCV:
+            self._logger.info("Best parameters: {}".format(self.classifier.best_params_))
+            self._logger.info("Best score: {}".format(self.classifier.best_score_))
+            self.classifier = self.classifier.best_estimator_
         self._logger.info("Fitting SVM took {} seconds.".format(time.time()-start))
 
     def train(self, patches, labels, num_augmentations=5):
@@ -166,6 +189,16 @@ class TextureClassifier(object):
             num_augmentations (int, optional): Number of augmentations per given training patch (default: 5).
         """
         assert len(patches) == len(labels), "Length of label list and length of patch list must be equal."
+        if type(patches) != list:
+            try:
+                patches = list(patches)
+            except Exception:
+                raise AttributeError("Attribute patches must be of type list.")
+        if type(labels) != list:
+            try:
+                labels = list(labels)
+            except Exception:
+                raise AttributeError("Attribute labels must be of type list.")
         # save original and augmented train data
         self.trainingdata = pd.DataFrame(data={
             "patches":patches,
@@ -200,12 +233,11 @@ class TextureClassifier(object):
         scores = self.classifier.predict_proba(features)
         return np.argmax(scores,axis=1), scores
 
-    #TODO MeanShift?
     def detect(self, image, label, gridsize=40, min_feature_size=24, max_feature_size=80, min_probability=0.5):
         """ Detect multi-scale features of class 'label' in given image.
-        The given image is scanned with a sliding window in different window sizes (6 sizes between 'min_feature_size'
-        and 'max_feature_size'). For each window, the underlying patch will be predicted and its coordinates saved as
-        detection if its score is higher than the given min_probability.
+        The given image is scanned with a sliding window in different window sizes (6 sizes between
+        'min_feature_size' and 'max_feature_size'). For each window, the underlying patch will be
+        predicted and its coordinates saved as detection if its score is higher than the given min_probability.
         Args:
             image (ndarray): Image (should have same spacing as train data).
             label (int): Label of class to be detected.
@@ -216,8 +248,10 @@ class TextureClassifier(object):
         Returns:
             pandas.DataFrame: Detected landmarks with (x, y, size, probability)
         """
-        assert label in self.classifier.classes_, "Given class label {} has not been trained. Trained class labels are: {}".format(label, self.classifier.classes_)
-        assert image.dtype == np.uint8, "Given image must be of type uint8, but is type: {}".format(image.dtype)
+        assert label in self.classifier.classes_, (
+            "Given class label {} has not been trained. Trained class "
+            "labels are: {}").format(label, self.classifier.classes_)
+        assert image.dtype == np.uint8, "Given image must be of dtype uint8, but is dtype: {}".format(image.dtype)
         label_idx = np.where(self.classifier.classes_ == label)[0][0]   # index of given label in class list
         num_steps = 6
         grid_coords = grid_coordinates(image.shape, gridsize, offset=max_feature_size//2)
@@ -242,11 +276,13 @@ class TextureClassifier(object):
         import pickle
         if not overwrite and os.path.exists(filename):
             raise IOError("Given filename already exists. Set overwrite=True to overwrite existing file.")
-        #dictionary = {"num_histogram_bins":self.num_histogram_bins, "pca_dims":self.pca_dims, "svm": self.classifier, "pca": self._pca}
+        dictionary = {"num_histogram_bins":self.num_histogram_bins, "pca_dims":self.pca_dims,
+                      "svm": self.classifier, "pca": self._pca}
         # old format:
-        dictionary = {"histogram_bins":self.num_histogram_bins, "numFeatures":self.pca_dims, "svm": self.classifier, "pca": self._pca,
-                      "labels":{"vessels":1,"bg":0}, "train_spacing":0.5, "defaultFeatureSizes":{"vessels":[150,400]}}
-        pickle.dump(dictionary, open(filename,"w"))
+        #dictionary = {"histogram_bins":self.num_histogram_bins, "numFeatures":self.pca_dims,
+        #              "svm": self.classifier, "pca": self._pca, "labels":{"vessels":1,"bg":0},
+        #              "train_spacing":0.5, "defaultFeatureSizes":{"vessels":[150,400]}}
+        pickle.dump(dictionary, open(filename,"wb"))
         self._logger.info("Saved classifier to {}".format(filename))
 
 
@@ -292,9 +328,16 @@ class HistogramFeatureExtractor(object):
             """
             features = []
             for patch in patches:
+                patch = np.array(patch)
+                assert patch.dtype == np.uint8, ("Patches must be of dtype uint8, given patch has dtype: {}"
+                                                 .format(patch.dtype))
                 radius_img = self._get_resized_radius_image(patch.shape)
-                assert patch.shape == radius_img.shape, "ERROR: patch.shape ({}) != radiusImg.shape ({})".format(patch.shape, radius_img.shape)
+                assert patch.shape == radius_img.shape, (
+                    "ERROR: patch.shape ({}) != radiusImg.shape ({})"
+                    .format(patch.shape, radius_img.shape))
                 # calculate and normalize 2D histogram
-                hist, _, _ = np.histogram2d(radius_img.flatten(), patch.flatten(), bins=[self.num_histogram_bins,np.linspace(0,256,num=self.num_histogram_bins+1)])
+                hist, _, _ = np.histogram2d(radius_img.flatten(), patch.flatten(),
+                                            bins=[self.num_histogram_bins,
+                                                  np.linspace(0, 256, num=self.num_histogram_bins+1)])
                 features.append((hist / float(patch.shape[0]*patch.shape[1])).flatten())
             return features
