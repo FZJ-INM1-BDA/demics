@@ -106,3 +106,4 @@ venv.bak/
 *.swo
 *.swp
 .DS_Store
+/.idea/
