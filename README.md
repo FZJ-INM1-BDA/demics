@@ -1,13 +1,32 @@
 # demics
 
-## Examples
+## Quick start
 
-### Adaptive Threshold & Connected Components
-This simple example demonstrates how to use ```demics```.
-Image data is loaded as a ```Tensor``` object. All operations in ```ops``` are applied iteratively on tiles of the input.
+### Semantic Segmentation with PyTorch Deep Learning Models
+Image data is loaded as a ```demics.Tensor``` object. All operations in ```ops``` are applied iteratively on tiles of the input.
 This sliding window approach enables the execution of memory intensive operations on very large inputs.
 
-Additionally, without any changes to the code or syntax, all operations in ```ops``` can work in parallel with the use of ```MPI```.
+Without any changes to the code or syntax, all operations in ```ops``` can work in parallel with the use of ```MPI```.
+
+````python
+from demics import Tensor, ops
+import torch_models
+
+# Read volume from 2D slices
+tensor = Tensor.from_file('volumes/img_Slice.*.tif')
+
+mask: Tensor = ops.semantic_segmentation(tensor, '/models/torch/histo_unet.pt', tile_size=128, overlap=32)
+label: Tensor = ops.label(mask, tile_size=512, overlap=128)
+visualization: Tensor = ops.scramble(label, tile_size=512, overlap=128)
+
+visualization.astype('uint8').to_tif('result.tif')
+
+````
+
+The command ```mpiexec -n 28 python mpi_pytorch_demo.py``` executes the code snipped via MPI with 28 worker processes.
+By default, the Deep Learning operations run on all available GPUs.
+
+### Adaptive Threshold & Connected Components
 
 ````python
 from demics import Tensor, ops
@@ -56,6 +75,7 @@ of NumPy's ndarray and can be instantiated from various sources.
 
 ```python
 from demics import Tensor
+import numpy as np
 
 array = np.random.randint(0, 255, (128, 128, 3))
 i = Tensor(array)
@@ -128,3 +148,17 @@ These are the rules:
 
 A warning is prompted if an object instance is part of a tile and touches the upper or left border of the overlap
 zone, as this indicates that the overlap is not large enough.
+
+
+## Saving PyTorch Models for `demics`
+
+The following snipped shows how to save a PyTorch Model via `torch.save`.
+```python
+import torch
+import torch.nn as nn
+
+def get_trained_model() -> nn.Module:
+    pass
+
+torch.save(get_trained_model(), 'my_model.pt')
+```
