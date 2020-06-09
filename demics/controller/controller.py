@@ -1,6 +1,6 @@
 from ..tensor import Tensor, TensorTile
 from ..util import pack_list, unpack_list, probe_size, Mock
-from ..env import Environment
+from ..environment import Environment
 from typing import List, Callable, Union, Tuple
 import numpy as np
 import sys
@@ -100,6 +100,9 @@ class Controller:
         ranks = 1 if aio else (self.env.ranks_gpu if gpu else self.env.ranks)
         return_overlap = False if aggregate is None else aggregate.return_overlap
 
+        if hasattr(callback, 'start') and callable(callback.start):
+            callback.start()
+
         if master:
             final_outputs = []
             if gpu and self.env.has_gpu is False:
@@ -140,6 +143,8 @@ class Controller:
                     self.log("finishing")
                     break
             final_outputs = self.EMPTY
+        if hasattr(callback, 'stop') and callable(callback.stop):
+            callback.stop()
         return final_outputs
 
     def __call__(

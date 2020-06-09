@@ -266,34 +266,6 @@ color_conversions = {
 class Tensor(np.ndarray):
     """
     Tensor Class.
-
-    Examples:
-        i = Tensor.from_tif('mytif.tif')
-        crop = i[:500, :500]
-
-        i = Tensor.from_h5('myh5.h5', dataset='image')
-        crop = i[:500, :500]
-
-        i = Tensor.from_tifs('z-scan/scan_slice[0-9][0-9].tif')
-        i.min_reduce()
-        crop = i[:500, :500]
-
-    Notes:
-        Reading:
-            From file:
-                - limited_memory: read only from disk what is requested
-                - unlimited_memory: read everything from disk on first read access and switch to ndarray mode
-            From ndarray:
-                - everything is in memory anyway, so always read from memory
-        Writing:
-            From hdf5 file with single dataset:
-                - limited_memory: Write directly to disk
-                - unlimited_memory: Always write to memory. Data is only flushed to disk on `self.close` or
-                    `self.__exit__`
-            From ndarray:
-                - everything is in memory anyway, so write to ndarray. Call `self.to_h5` to flush.
-            Others:
-                - no write access
     """
 
     def __new__(
@@ -1284,14 +1256,7 @@ TR = ['__abs__', '__add__', '__and__', '__bool__', '__complex__', '__contains__'
 
 for tr in TR:
     def interim(self: Tensor, *a, t=tr, **kw):
-        # print("INTERIM", t)
-        # print("       ", a, t, kw)
         self._try_load_trigger()
-        # o = getattr(super(Tensor, self), t)(*a, **kw)
-        # print("       ", type(o))
-        # if isinstance(o, Tensor):
-        #     print("       ", o.array_mode())
-        # return o
         return getattr(super(Tensor, self), t)(*a, **kw)
 
 

@@ -11,7 +11,79 @@ from skimage.measure import label as skm_label, regionprops
 import skimage.morphology as morph
 from scipy import ndimage as ndi
 
+try:
+    from torch.nn import Module
+except ModuleNotFoundError:
+    Module = type.__class__
+
 VERBOSE = False
+
+
+def _wrap(self, func, inputs, *args, overlap=None, tile_size=None, **kwargs):
+    overlap = self.overlap if overlap is None else overlap
+    tile_size = self.tile_size if tile_size is None else tile_size
+    if overlap is None:
+        raise ValueError('Overlap must be defined for this operation.')
+    inputs, stat = pack_list(inputs)
+    res = self.con(callback=func, i_objects=inputs, overlap=overlap, args=args,
+                   kwargs=kwargs, aggregate=self.aggregate, tile_size=tile_size)
+    return unpack_list(res, stat)
+
+
+def _pad(inputs: np.ndarray, dims=2, divisor=32):
+    pad_width = []
+    for j, s in enumerate(inputs.shape):
+        if j >= dims:
+            pad_width.append([0, 0])
+        else:
+            d = int(np.ceil(s / divisor)) * divisor - s
+            a = d // 2
+            b = d - a
+            pad_width.append([a, b])
+    if np.sum(pad_width) > 0:  # ~ 79.9 ns
+        # np.pad does not check whether pad_width actually defines padding or not
+        return np.pad(inputs, pad_width=pad_width), pad_width[:dims]  # ~ 10 ms
+    else:
+        return inputs, pad_width[:dims]
+
+
+def _unpad(inputs, pad_width):
+    if np.sum(pad_width) > 0:
+        return inputs[tuple([slice(a, -b if b > 0 else None) for a, b in pad_width])]
+    else:
+        return inputs
+
+
+def normalize_(inputs: np.ndarray, method: str):
+    """Normalize.
+
+    Normalizes inputs inplace if possible. If data types are not compatible a copy is created.
+
+    Args:
+        inputs:
+        method:
+
+    Returns:
+
+    """
+    if method == '0..255_0..1':
+        try:
+            inputs /= 255
+        except TypeError:
+            inputs = inputs / 255
+    elif method == '0..255_-1..1':
+        try:
+            inputs /= 127.5
+        except TypeError:
+            inputs = inputs / 127.5
+        inputs -= 1
+    elif method == 'mean_std':
+        try:
+            inputs /= np.std(inputs)
+        except TypeError:
+            inputs = inputs / 255
+        inputs -= np.mean(inputs)
+    return inputs
 
 
 class Op:
@@ -25,16 +97,23 @@ class Op:
 
     def __call__(self, func):
         def wrapper(inputs, *args, overlap=None, tile_size=None, **kwargs):  # multi-input ops as tuples of inputs
-            overlap = self.overlap if overlap is None else overlap
-            tile_size = self.tile_size if tile_size is None else tile_size
-            if overlap is None:
-                raise ValueError('Overlap must be defined for this operation.')
-            inputs, stat = pack_list(inputs)
-            res = self.con(callback=func, i_objects=inputs, overlap=overlap, args=args,
-                           kwargs=kwargs, aggregate=self.aggregate, tile_size=tile_size)
-            return unpack_list(res, stat)
+            return _wrap(self, func, inputs, *args, overlap=overlap, tile_size=tile_size, **kwargs)
 
         return wrapper
+
+    def start(self):
+        """Start up method.
+
+        This method is called right before this op is applied for the first time.
+        """
+        pass
+
+    def stop(self):
+        """Stop method.
+
+        This method is called after this op has been applied for the last time.
+        """
+        pass
 
 
 class AtomicOp(Op):
@@ -45,6 +124,87 @@ class AtomicOp(Op):
 class NonAtomicOp(Op):
     def __init__(self, overlap=None, aggregate=None, tile_size=None, *args, verbose=VERBOSE, **kwargs):
         super().__init__(overlap=overlap, aggregate=aggregate, tile_size=tile_size, *args, verbose=verbose, **kwargs)
+
+
+class TorchModel(NonAtomicOp):
+    def __init__(self, overlap=None, aggregate=None, tile_size=1024, *args, verbose=VERBOSE, **kwargs):
+        super().__init__(overlap=overlap, aggregate=aggregate, tile_size=tile_size, *args, verbose=verbose, **kwargs)
+        self.model = None
+        self.device = None
+
+    def start(self, filename=..., gpu=True):
+        if filename is ...:
+            return
+
+        if gpu is False or self.con.env.has_gpu:
+            import torch
+            self.model = torch.load(filename)
+        if gpu and self.con.env.has_gpu:
+            self.device = f'cuda:{self.con.env.local_gpu_rank}'
+            self.model = self.model.to(self.device)
+
+        if self.model is not None:
+            self.model.eval()
+
+    def stop(self):
+        if self.model is not None:
+            import torch
+            self.model.to('cpu')
+            self.model = None
+            torch.cuda.empty_cache()
+
+    def __call__(self, func):
+        def wrapper(inputs, filename: str, *args, overlap=None, tile_size=None, **kwargs):  # multi-input only as tuple
+            if filename.endswith('.pb'):
+                raise NotImplementedError('TensorFlow models are not yet supported in this operation.')
+            if self.model is None:
+                self.start(filename)
+            return _wrap(self, func, inputs, *args, overlap=overlap, tile_size=tile_size, _model=self.model,
+                         _device=self.device, filename=filename, **kwargs)
+        return wrapper
+
+
+@TorchModel()
+def semantic_segmentation(
+        inputs: np.ndarray,
+        filename: str,
+        dtype=np.float32,
+        **kwargs
+):
+    """
+
+    Args:
+        inputs: Input array. Shape like (h, w, [c])
+        filename: File name of the saved PyTorch model.
+        dtype: Data type that is expected by the model
+
+    Returns:
+        Segmentation result. Shape like (h, w).
+    """
+    from torch import as_tensor
+
+    model: Module = kwargs['_model']
+    device: str = kwargs['_device']
+    if isinstance(dtype, str):
+        dtype = np.dtype(dtype)
+
+    inputs, pad_width = _pad(inputs)
+
+    if inputs.ndim == 2:
+        inputs = inputs[None]  # assuming no batch processing
+    else:
+        inputs = np.transpose(inputs, (2, 0, 1))
+
+    if inputs.dtype != dtype:
+        inputs = inputs.astype(dtype)
+    res = model(as_tensor(inputs[None]).to(device))[0].data.cpu().numpy()
+    if res.ndim == 3:
+        if res.shape[0] > 1:
+            res = res.argmax(0)
+        else:
+            res = np.squeeze(res, 0)
+    res = _unpad(res, pad_width)
+    return res
 
 
 class TfModel(NonAtomicOp):
@@ -62,7 +222,7 @@ class TfModel(NonAtomicOp):
                 overlap = model.padding
             if overlap is None:
                 raise ValueError('Overlap must be defined for this operation.')
-            if gpu is False or self.con.has_gpu:
+            if gpu is False or self.con.env.has_gpu:
                 inputs, stat = pack_list(inputs)
                 if model.is_tf1():
                     res = self._handle_tf1(model, model_dir, func, inputs, overlap, gpu, args, kwargs)
@@ -134,39 +294,12 @@ def tf_model(
     # Preprocessing
     if _preprocessing is not None:
         for prep in _preprocessing:
-            if prep == '0..255_0..1':
-                try:
-                    inputs /= 255
-                except TypeError:
-                    inputs = inputs / 255
-            elif prep == '0..255_-1..1':
-                try:
-                    inputs /= 127.5
-                except TypeError:
-                    inputs = inputs / 127.5
-                inputs -= 1
-            elif prep == 'mean_std':
-                try:
-                    inputs /= np.std(inputs)
-                except TypeError:
-                    inputs = inputs / 255
-                inputs -= np.mean(inputs)
+            inputs = normalize_(inputs, prep)
 
     # Ensure shape
-    divisor = 32
-    dims = 2
-    pad_width = []
-    for j, s in enumerate(inputs.shape):
-        if j >= dims:
-            pad_width.append([0, 0])
-        else:
-            d = int(np.ceil(s / divisor)) * divisor - s
-            a = d // 2
-            b = d - a
-            pad_width.append([a, b])
-    inputs = np.pad(inputs, pad_width=pad_width)
+    inputs, pad_width = _pad(inputs)
     res = _session.run(_input_tensor, {_output_tensor: [inputs]})[0]
-    res = res[tuple([slice(a, -b if b > 0 else None) for a, b in pad_width[:dims]])]
+    res = _unpad(res, pad_width)
     return res
 
 
