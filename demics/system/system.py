@@ -1,6 +1,8 @@
 from numba import cuda
 import psutil
 from ..util import Printable, Bytes
+import platform
+import socket
 
 
 class Device(Printable):
@@ -15,6 +17,11 @@ class Device(Printable):
 
 class System(Printable):
     def __init__(self):
+        # System
+        plat = platform.uname()
+        self.system = plat.system
+        self.node = plat.node
+        self.ip = self.get_ip()
 
         # GPU
         devices: cuda.cudadrv.devices._DeviceList = cuda.list_devices()
@@ -34,3 +41,16 @@ class System(Printable):
         # Memory
         self.virtual_memory = Bytes(psutil.virtual_memory().total)
         self.swap_memory = Bytes(psutil.swap_memory().total)
+
+    @staticmethod
+    def get_ip():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(('10.255.255.255', 1))
+            i = s.getsockname()[0]
+        except Exception:
+            i = '127.0.0.1'
+        finally:
+            s.close()
+        return i
+
