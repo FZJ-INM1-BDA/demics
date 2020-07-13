@@ -1111,11 +1111,11 @@ class Tensor(np.ndarray):
         if tile_width is None:
             tile_width = tile_height
         dims = self.guess_spatial_dimensions()
-        rs = self.shape[2:2 + dims]
+        rs = self.shape[2:dims]
         nums = [min(2, int(np.ceil(np.log10(i)))) for i in rs]
         for i in range(int(np.prod(rs))):
-            indices = np.unravel_index(i)
-            sel = (slice(None), slice(None)) + tuple((slice(j) for j in indices))
+            indices = np.unravel_index(i, rs)
+            sel = (slice(None), slice(None)) + tuple(indices)
             suffix = '_'.join([f'%0{n}d' % index for n, index in zip(nums, indices)])
             with Tiff(stub + '_Slice' + suffix + ending, 'w') as handle:
                 handle.write(self.lazy_load(sel), method=method, tile_width=tile_width, tile_length=tile_height,
