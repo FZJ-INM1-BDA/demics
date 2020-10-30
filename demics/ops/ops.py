@@ -1,6 +1,7 @@
 from .util import exclude_regions, calc_min_max_cart, mean_magnitude
-from ..controller import Controller, LabelAggregate, LabelVisAggregate
-from ..meta import Model
+from ..controller.controller import Controller
+from ..controller.aggregate import LabelAggregate, LabelVisAggregate
+from ..meta.model import Model
 from ..util import pack_list, unpack_list
 import pandas as pd
 import numpy as np
@@ -19,18 +20,18 @@ except ModuleNotFoundError:
 VERBOSE = False
 
 
-def _wrap(self, func, inputs, *args, overlap=None, tile_size=None, **kwargs):
+def _wrap(self, func, inputs, *args, overlap=None, tile_size=None, gpu=False, **kwargs):
     overlap = self.overlap if overlap is None else overlap
     tile_size = self.tile_size if tile_size is None else tile_size
     if overlap is None:
         raise ValueError('Overlap must be defined for this operation.')
     inputs, stat = pack_list(inputs)
     res = self.con(callback=func, i_objects=inputs, overlap=overlap, args=args,
-                   kwargs=kwargs, aggregate=self.aggregate, tile_size=tile_size)
+                   kwargs=kwargs, aggregate=self.aggregate, tile_size=tile_size, gpu=gpu)
     return unpack_list(res, stat)
 
 
-def _pad(inputs: np.ndarray, dims=2, divisor=32):
+def pad(inputs: np.ndarray, dims=2, divisor=32):
     pad_width = []
     for j, s in enumerate(inputs.shape):
         if j >= dims:
@@ -47,7 +48,7 @@ def _pad(inputs: np.ndarray, dims=2, divisor=32):
         return inputs, pad_width[:dims]
 
 
-def _unpad(inputs, pad_width):
+def unpad(inputs, pad_width):
     if np.sum(pad_width) > 0:
         return inputs[tuple([slice(a, -b if b > 0 else None) for a, b in pad_width])]
     else:
@@ -139,6 +140,8 @@ class TorchModel(NonAtomicOp):
         if gpu is False or self.con.env.has_gpu:
             import torch
             self.model = torch.load(filename)
+            if isinstance(self.model, dict):
+                self.model = self.model['model']
         if gpu and self.con.env.has_gpu:
             self.device = f'cuda:{self.con.env.local_gpu_rank}'
             self.model = self.model.to(self.device)
@@ -160,7 +163,7 @@ class TorchModel(NonAtomicOp):
             if self.model is None:
                 self.start(filename)
             return _wrap(self, func, inputs, *args, overlap=overlap, tile_size=tile_size, _model=self.model,
-                         _device=self.device, filename=filename, **kwargs)
+                         _device=self.device, filename=filename, gpu=True, **kwargs)
         return wrapper
 
 
@@ -188,7 +191,7 @@ def semantic_segmentation(
     if isinstance(dtype, str):
         dtype = np.dtype(dtype)
 
-    inputs, pad_width = _pad(inputs)
+    inputs, pad_width = pad(inputs)
 
     if inputs.ndim == 2:
         inputs = inputs[None]  # assuming no batch processing
@@ -203,7 +206,7 @@ def semantic_segmentation(
             res = res.argmax(0)
         else:
             res = np.squeeze(res, 0)
-    res = _unpad(res, pad_width)
+    res = unpad(res, pad_width)
     return res
 
 
@@ -297,9 +300,9 @@ def tf_model(
             inputs = normalize_(inputs, prep)
 
     # Ensure shape
-    inputs, pad_width = _pad(inputs)
+    inputs, pad_width = pad(inputs)
     res = _session.run(_input_tensor, {_output_tensor: [inputs]})[0]
-    res = _unpad(res, pad_width)
+    res = unpad(res, pad_width)
     return res
 
 

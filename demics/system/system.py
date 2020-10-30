@@ -1,6 +1,6 @@
+from ..util import Printable, Bytes
 from numba import cuda
 import psutil
-from ..util import Printable, Bytes
 import platform
 import socket
 

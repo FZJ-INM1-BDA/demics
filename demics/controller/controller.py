@@ -1,9 +1,8 @@
-from ..tensor import Tensor, TensorTile
+from ..tensor.tensor import Tensor, TensorTile
 from ..util import pack_list, unpack_list, probe_size, Mock
-from ..environment import Environment
+from ..environment.environment import Environment
 from typing import List, Callable, Union, Tuple
 import numpy as np
-import sys
 
 
 class Controller:

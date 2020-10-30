@@ -1,0 +1,13 @@
+pandas
+numpy
+scikit-image
+scipy
+h5py
+pytiff
+psutil
+numba
+imageio
+pillow
+mpi4py
+setuptools
+opencv-python
